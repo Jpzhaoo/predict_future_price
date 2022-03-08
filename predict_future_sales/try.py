@@ -7,6 +7,7 @@ le = LabelEncoder()
 import category_encoders as ce
 import warnings
 from collections import Counter
+from sklearn.metrics import mean_squared_error
 
 pd.set_option('display.max_columns', 160)
 pd.set_option('display.max_rows', 400)
@@ -121,8 +122,8 @@ sales[sales.duplicated(['item_id'], keep=False)]
 sales = (sales
     .query('0 < item_price < 50000 and 0 < item_cnt_day < 1001') # 去除异常值
     .replace({
-        'shop_id':{0:57, 1:58, 11:10}, #replacing obsolete shop id's
-        'item_id':item_map # fixing duplicate item id's  
+        'shop_id':{0:57, 1:58, 11:10}, 
+        'item_id':item_map # 处理重复item_id  
     })    
 )
 
@@ -209,13 +210,13 @@ df.head()
 test['date_block_num'] = 34
 del test['ID']
 
-# append test set to training dataframe
+# 将测试集添加进去
 df.isnull().sum() # 没有缺失值
 df = pd.concat([df,test]).fillna(0)
 df = df.reset_index()
 del df['index']
 
-#join sales and item inforamtion to the training dataframe
+# 连接sales, dates 数据
 df = pd.merge(df, sales, on=['shop_id', 'item_id', 'date_block_num'], how='left').fillna(0)
 df = pd.merge(df, dates, on=['date_block_num','shop_id'], how='left')
 df = pd.merge(df, items.drop(columns=['item_name','group_name','category_name']), on='item_id', how='left')
@@ -232,7 +233,7 @@ from sklearn.metrics import silhouette_score
 
 shops = pd.read_csv('./data_eng/shops.csv')
 
-# clustering shops
+# 对shops作聚类
 shops_cats = pd.DataFrame(
     np.array(list(product(*[df['shop_id'].unique(), df['category_id'].unique()]))),
     columns =['shop_id', 'category_id']
@@ -270,10 +271,10 @@ plt.show()
 kmeans = KMeans(n_clusters=7, random_state=0).fit(shops_cats)
 shops_cats['shop_cluster'] = kmeans.labels_.astype('int8')
 
-#adding these clusters to the shops dataframe
+
 # 由于shops 共有60个 shop_id, 而shops_cats 中只有42个，因此会有缺失值。
 shops = shops.join(shops_cats['shop_cluster'], on='shop_id')
-#removing unused shop ids
+#移除没有用的shop_id
 shops.dropna(inplace=True)
 #------------------------------
 
@@ -285,16 +286,15 @@ shops.dropna(inplace=True)
 shops['shop_name'] = shops['shop_name'].str.lower()
 shops['shop_name'] = shops['shop_name'].str.replace(r'[^\w\d\s]', ' ')
 
-#creating a column for the type of shop
+# 添加shop_type
 shops['shop_type'] = 'regular'
 
-#there is some overlap in tc and mall, mall is given precedence
 shops.loc[shops['shop_name'].str.contains(r'tc'), 'shop_type'] = 'tc'
 shops.loc[shops['shop_name'].str.contains(r'mall|center|mega'), 'shop_type'] = 'mall'
 shops.loc[shops['shop_id'].isin([9,20]), 'shop_type'] = 'special'
 shops.loc[shops['shop_id'].isin([12,55]), 'shop_type'] = 'online'
 
-#the first word of shop name is largely sufficient as a city feature
+# shop_name 的一个词看作是城市名称
 shops['shop_city'] = shops['shop_name'].str.split().str[0]
 shops.loc[shops['shop_id'].isin([12,55]), 'shop_city'] = 'online'
 shops.shop_city = le.fit_transform(shops.shop_city.values)
@@ -317,7 +317,7 @@ df.loc[df['first_sale_day']==0, 'first_sale_day'] = 1035 #  为0说明该商品�
 df['prev_days_on_sale'] = [max(idx) for idx in zip(df['first_day_of_month']-df['first_sale_day'], [0]*len(df))] # 为0说明截止本月，该商品还没有卖出
 del df['first_day_of_month']
 
-#freeing RAM, removing unneeded columns and encoding object columns
+# 释放内存
 del sales, categories, shops, shops_cats, temp, temp2, test, dupes, item_map, 
 df.head()
 
@@ -331,7 +331,6 @@ df['item_cnt'] = df['item_cnt'].clip(0, 20) # 下界为0，上界为20 超过20�
 # 压缩数据，减小内存占用
 #------------------------------
 def downcast(df):
-    #reduce size of the dataframe
     float_cols = [c for c in df if df[c].dtype in ["float64"]]
     int_cols = [c for c in df if df[c].dtype in ['int64']]
     df[float_cols] = df[float_cols].astype('float32')
@@ -382,8 +381,7 @@ def agg_cnt_col(df, merging_cols, new_col, aggregation):
     df = pd.merge(df, temp, on=merging_cols, how='left')
     return df
 
-#individual items across all shops
-# 当月该 item 在每家商店平均售出量
+# 当月某商品在每家商店平均售出量
 df = agg_cnt_col(df, ['date_block_num','item_id'],'item_cnt_all_shops',{'item_cnt':'mean'})
 df = agg_cnt_col(df, ['date_block_num','item_id'],'item_cnt_all_shops_median',{'item_cnt':'median'}) 
 # 当月某种类在某商店平均/中位数销量
@@ -418,9 +416,9 @@ def new_item_sales(df, merging_cols, new_col):
     df = pd.merge(df, temp, on=merging_cols, how='left')
     return df
 
-# mean units sold of new item in category at individual shop
+# 每家商店每个种类的新商品平均月销量
 df = new_item_sales(df, ['date_block_num','category_id','shop_id'], 'new_items_in_cat')
-# mean units sold of new item in category across all shops
+# 所有商店各种类新商品平均月销量
 df = new_item_sales(df, ['date_block_num','category_id'], 'new_items_in_cat_all_shops')
 #------------------------------
 
@@ -624,7 +622,6 @@ for n in [4,6,11]:
 
 # %%
 #------------------------------
-#assign appropriate datatypes
 df = downcast(df)
 int8_cols = [
     'item_cnt','month','group_id','shop_type',
@@ -704,7 +701,7 @@ del temp
 #------------------------------
 
 
-## 1.7 Encoding name information
+## 1.7 对名称信息进行 encoding
 # %%
 #------------------------------
 # 添加0/1变量——item_name 是否包含常见的word
@@ -729,4 +726,141 @@ drop_cols = [
 items = items.drop(columns=drop_cols)
 
 df = df.join(items, on='item_id')
+#------------------------------
+
+
+
+# %%
+#------------------------------
+def binary_encode(df, letters, cols):
+    encoder = ce.BinaryEncoder(cols=[f'item_name_first{letters}'], return_df=True)
+    temp = encoder.fit_transform(df[f'item_name_first{letters}'])
+    df = pd.concat([df,temp], axis=1)
+    del df[f'item_name_first{letters}_0']
+    name_cols = [f'item_name_first{letters}_{x}' for x in range(1,cols)]
+    df[name_cols] = df[name_cols].astype('int8')
+    return df
+
+df = binary_encode(df, 11, 15)
+    
+del df['item_name_first4'], df['item_name_first6']
+
+df.to_pickle('df_complete.pkl')
+#------------------------------
+
+
+
+# %%
+#------------------------------
+# 建模
+df = pd.read_pickle('./df_complete.pkl')
+
+X_train = df[~df.date_block_num.isin([0,1,33,34])]
+y_train = X_train['item_cnt']
+del X_train['item_cnt']
+
+X_val = df[df['date_block_num']==33]
+y_val = X_val['item_cnt']
+del X_val['item_cnt']
+
+X_test = df[df['date_block_num']==34].drop(columns='item_cnt')
+X_test = X_test.reset_index()
+del X_test['index']
+
+del df
+#------------------------------
+
+
+# %%
+#------------------------------
+# 使用 lightgbm 和 optuna 调参
+import lightgbm as lgb
+
+lgb_train = lgb.Dataset(X_train, y_train)
+lgb_eval  = lgb.Dataset(X_val, y_val, reference=lgb_train)
+
+def objective(trial):
+    
+    
+    param = {
+        "objective": "regression",
+        "metric": "rmse",
+        "verbosity": -1,
+        "boosting_type": "gbdt",
+        "lambda_l1": trial.suggest_float("lambda_l1", 1e-4, 10.0),
+        "lambda_l2": trial.suggest_float("lambda_l2", 1e-4, 10.0),
+        "num_leaves": trial.suggest_int("num_leaves", 2, 256),
+        'colsample_bytree': trial.suggest_categorical('colsample_bytree', [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]),
+        "feature_fraction": trial.suggest_float("feature_fraction", 0.4, 1.0),
+        "bagging_fraction": trial.suggest_float("bagging_fraction", 0.4, 1.0),
+        'learning_rate': trial.suggest_float('learning_rate', 0.001, 0.1),
+        'max_depth': trial.suggest_int('max_depth', 2, 12, step=1),
+        "min_gain_to_split": trial.suggest_float("min_gain_to_split", 0, 15),
+        "min_child_samples": trial.suggest_int("min_child_samples", 5, 100),
+    }
+
+    model = lgb.train(param, 
+                      lgb_train,
+                      valid_sets=[lgb_train,lgb_eval],
+                      early_stopping_rounds=15, #10,
+                      verbose_eval=1)
+    
+    y_pred = model.predict(X_val)
+    score = np.sqrt(mean_squared_error(y_val, y_pred))
+
+    return score
+#------------------------------
+
+
+#%%
+#------------------------------
+
+import optuna 
+study = optuna.create_study(direction='minimize')
+study.optimize(objective, n_trials=5)
+ 
+print('Number of finished trials:', len(study.trials))
+print('Best trial:', study.best_trial.params)
+#------------------------------
+
+# %%
+#------------------------------
+best_params = study.best_trial.params
+print(f'Best trial parameters\n{best_params}')
+#------------------------------
+
+# %%
+#------------------------------
+x = {"objective": "regression",
+     "metric"   : "rmse",
+     "verbosity": -1,
+     "boosting_type": "gbdt"}
+
+best_params.update(x)
+best_params
+#------------------------------
+
+
+# %%
+#------------------------------
+evals_result = {} 
+
+model = lgb.train(best_params,
+                  lgb_train,
+                  valid_sets=[lgb_train,lgb_eval],
+                  evals_result=evals_result,
+                  early_stopping_rounds=30, # 20
+                  verbose_eval=1,
+                  )
+
+y_pred = model.predict(X_val)
+np.sqrt(mean_squared_error(y_val, y_pred))
+#------------------------------
+
+
+# %%
+#------------------------------
+submission = pd.read_csv('./data/sample_submission.csv')
+submission['item_cnt_month'] = model.predict(X_test).clip(0,20)
+submission[['ID', 'item_cnt_month']].to_csv('initial_lgb_submission.csv', index=False)
 #------------------------------
